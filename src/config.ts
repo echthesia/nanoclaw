@@ -20,8 +20,25 @@ export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 export const MAIN_GROUP_FOLDER = 'main';
 
+// Container backend: 'apple' for macOS Apple Container, 'podman' for Podman + Kata (Linux)
+// Auto-detected from platform if not set
+export const CONTAINER_BACKEND: 'apple' | 'podman' =
+  (process.env.CONTAINER_BACKEND as 'apple' | 'podman') ||
+  (process.platform === 'darwin' ? 'apple' : 'podman');
+
+// The CLI binary name
+export const CONTAINER_COMMAND =
+  CONTAINER_BACKEND === 'apple' ? 'container' : 'podman';
+
+// OCI runtime for Podman (Kata Containers with Firecracker VMM)
+// Ignored when CONTAINER_BACKEND is 'apple'
+export const CONTAINER_RUNTIME =
+  process.env.CONTAINER_RUNTIME || 'kata-runtime';
+
 export const CONTAINER_IMAGE =
-  process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
+  process.env.CONTAINER_IMAGE || (CONTAINER_BACKEND === 'podman'
+    ? 'localhost/nanoclaw-agent:latest'
+    : 'nanoclaw-agent:latest');
 export const CONTAINER_TIMEOUT = parseInt(
   process.env.CONTAINER_TIMEOUT || '1800000',
   10,

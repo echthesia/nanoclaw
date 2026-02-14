@@ -4,6 +4,9 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  CONTAINER_BACKEND,
+  CONTAINER_COMMAND,
+  CONTAINER_RUNTIME,
   DATA_DIR,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
@@ -391,7 +394,7 @@ function recoverPendingMessages(): void {
   }
 }
 
-function ensureContainerSystemRunning(): void {
+function ensureAppleContainerRunning(): void {
   try {
     execSync('container system status', { stdio: 'pipe' });
     logger.debug('Apple Container system already running');
@@ -450,6 +453,98 @@ function ensureContainerSystemRunning(): void {
     }
   } catch (err) {
     logger.warn({ err }, 'Failed to clean up orphaned containers');
+  }
+}
+
+function ensurePodmanKataRunning(): void {
+  // Verify Podman is available
+  try {
+    execSync('podman info --format json', { stdio: 'pipe', timeout: 10000 });
+    logger.debug('Podman is available');
+  } catch (err) {
+    logger.error({ err }, 'Podman is not available');
+    console.error(
+      '\n╔════════════════════════════════════════════════════════════════╗',
+    );
+    console.error(
+      '║  FATAL: Podman is not available                                ║',
+    );
+    console.error(
+      '║                                                                ║',
+    );
+    console.error(
+      '║  Agents cannot run without Podman + Kata Containers. To fix:  ║',
+    );
+    console.error(
+      '║  1. Install Podman: https://podman.io/docs/installation       ║',
+    );
+    console.error(
+      '║  2. Install Kata:   https://katacontainers.io/docs/           ║',
+    );
+    console.error(
+      '║  3. Restart NanoClaw                                          ║',
+    );
+    console.error(
+      '╚════════════════════════════════════════════════════════════════╝\n',
+    );
+    throw new Error('Podman is required but not available');
+  }
+
+  // Verify Kata runtime is installed
+  if (CONTAINER_RUNTIME) {
+    try {
+      execSync(`${CONTAINER_RUNTIME} version`, { stdio: 'pipe', timeout: 5000 });
+      logger.debug({ runtime: CONTAINER_RUNTIME }, 'Kata runtime is available');
+    } catch {
+      // kata-runtime may not have a 'version' subcommand in all installs;
+      // fall back to checking the binary exists
+      try {
+        execSync(`which ${CONTAINER_RUNTIME}`, { stdio: 'pipe' });
+        logger.debug({ runtime: CONTAINER_RUNTIME }, 'Kata runtime binary found');
+      } catch (err) {
+        logger.error({ err, runtime: CONTAINER_RUNTIME }, 'Kata runtime not found');
+        console.error(
+          `\nFATAL: Kata runtime '${CONTAINER_RUNTIME}' not found in PATH.`,
+        );
+        console.error(
+          'Install Kata Containers: https://katacontainers.io/docs/',
+        );
+        console.error(
+          'Ensure the Firecracker VMM configuration is active.\n',
+        );
+        throw new Error(`Kata runtime '${CONTAINER_RUNTIME}' is required but not found`);
+      }
+    }
+  }
+
+  // Kill and clean up orphaned NanoClaw containers from previous runs
+  try {
+    const output = execSync('podman ps --format json', {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf-8',
+    });
+    const containers: { Names: string[] }[] = JSON.parse(output || '[]');
+    const orphans = containers
+      .filter((c) => c.Names?.some((n: string) => n.startsWith('nanoclaw-')))
+      .flatMap((c) => c.Names.filter((n: string) => n.startsWith('nanoclaw-')));
+    for (const name of orphans) {
+      try {
+        execSync(`podman stop ${name}`, { stdio: 'pipe' });
+      } catch { /* already stopped */ }
+    }
+    if (orphans.length > 0) {
+      logger.info({ count: orphans.length, names: orphans }, 'Stopped orphaned containers');
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Failed to clean up orphaned containers');
+  }
+}
+
+function ensureContainerSystemRunning(): void {
+  if (CONTAINER_BACKEND === 'podman') {
+    ensurePodmanKataRunning();
+  } else {
+    ensureAppleContainerRunning();
   }
 }
 

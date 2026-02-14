@@ -1,0 +1,27 @@
+# NanoClaw systemd service (Linux equivalent of com.nanoclaw.plist)
+# Install: cp nanoclaw.service ~/.config/systemd/user/
+# Enable:  systemctl --user enable nanoclaw
+# Start:   systemctl --user start nanoclaw
+# Logs:    journalctl --user -u nanoclaw -f
+
+[Unit]
+Description=NanoClaw - Personal Claude Assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/nanoclaw
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=10
+Environment=NODE_ENV=production
+Environment=CONTAINER_BACKEND=podman
+Environment=CONTAINER_RUNTIME=kata-runtime
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

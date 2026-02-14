@@ -4,7 +4,7 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 ## Quick Context
 
-Single Node.js process that connects to WhatsApp, routes messages to Claude Agent SDK running in Apple Container (Linux VMs). Each group has isolated filesystem and memory.
+Single Node.js process that connects to WhatsApp, routes messages to Claude Agent SDK running in isolated containers. On macOS, uses Apple Container; on Linux, uses Podman with Kata Containers (Firecracker VMM). Each group has isolated filesystem and memory.
 
 ## Key Files
 
@@ -14,8 +14,8 @@ Single Node.js process that connects to WhatsApp, routes messages to Claude Agen
 | `src/channels/whatsapp.ts` | WhatsApp connection, auth, send/receive |
 | `src/ipc.ts` | IPC watcher and task processing |
 | `src/router.ts` | Message formatting and outbound routing |
-| `src/config.ts` | Trigger pattern, paths, intervals |
-| `src/container-runner.ts` | Spawns agent containers with mounts |
+| `src/config.ts` | Trigger pattern, paths, intervals, container backend |
+| `src/container-runner.ts` | Spawns agent containers with mounts (Apple Container or Podman+Kata) |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
@@ -39,13 +39,29 @@ npm run build        # Compile TypeScript
 ./container/build.sh # Rebuild agent container
 ```
 
-Service management:
+Service management (macOS):
 ```bash
 launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
 ```
 
-## Container Build Cache
+Service management (Linux):
+```bash
+cp nanoclaw.service ~/.config/systemd/user/
+systemctl --user enable --now nanoclaw
+journalctl --user -u nanoclaw -f   # View logs
+```
+
+## Container Backend
+
+Auto-detected from platform (`CONTAINER_BACKEND` env var to override):
+
+| Platform | Backend | Runtime | Config |
+|----------|---------|---------|--------|
+| macOS | Apple Container | — | Default |
+| Linux | Podman | Kata Containers (Firecracker) | `CONTAINER_RUNTIME=kata-runtime` |
+
+## Container Build Cache (macOS / Apple Container)
 
 Apple Container's buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild:
 
