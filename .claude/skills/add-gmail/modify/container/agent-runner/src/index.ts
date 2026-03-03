@@ -62,15 +62,12 @@ interface SDKUserMessage {
  * and queues messages for the agent runner.
  */
 class IpcClient {
-  private socket: net.Socket;
   private buffer = '';
   private messageQueue: string[] = [];
   private closeReceived = false;
   private waitResolve: (() => void) | null = null;
 
   constructor(socket: net.Socket) {
-    this.socket = socket;
-
     socket.on('data', (raw) => {
       this.buffer += raw.toString();
       let idx: number;
@@ -119,28 +116,19 @@ class IpcClient {
 
   /** Wait for the next message or close signal. Returns the combined text, or null if close. */
   waitForMessage(): Promise<string | null> {
-    // Check immediately
     if (this.closeReceived) return Promise.resolve(null);
     const msgs = this.drainMessages();
     if (msgs.length > 0) return Promise.resolve(msgs.join('\n'));
 
     return new Promise<string | null>((resolve) => {
-      this.waitResolve = () => {
-        this.waitResolve = null;
-        if (this.closeReceived) {
-          resolve(null);
-        } else {
-          const drained = this.drainMessages();
-          if (drained.length > 0) {
-            resolve(drained.join('\n'));
-          }
-          // If neither close nor messages, keep waiting — re-register
-          // (edge case: spurious wake from partial data)
-          else {
-            this.waitForMessage().then(resolve);
-          }
-        }
+      const tryResolve = () => {
+        if (this.closeReceived) { resolve(null); return; }
+        const drained = this.drainMessages();
+        if (drained.length > 0) { resolve(drained.join('\n')); return; }
+        // Spurious wake (partial data, no complete message) — re-register
+        this.waitResolve = tryResolve;
       };
+      this.waitResolve = tryResolve;
     });
   }
 }

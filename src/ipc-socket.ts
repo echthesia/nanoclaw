@@ -57,7 +57,7 @@ interface GroupSocketState {
 }
 
 export interface IpcSocketServer {
-  createGroupSocket(groupFolder: string): string;
+  createGroupSocket(groupFolder: string): Promise<string>;
   destroyGroupSocket(groupFolder: string): void;
   sendToGroup(groupFolder: string, message: object): void;
   shutdown(): void;
@@ -105,7 +105,7 @@ export function createIpcSocketServer(deps: IpcDeps): IpcSocketServer {
     }
   }
 
-  function createGroupSocket(groupFolder: string): string {
+  async function createGroupSocket(groupFolder: string): Promise<string> {
     const groupIpcDir = resolveGroupIpcPath(groupFolder);
     fs.mkdirSync(groupIpcDir, { recursive: true });
 
@@ -122,8 +122,9 @@ export function createIpcSocketServer(deps: IpcDeps): IpcSocketServer {
     // Remove stale socket file from previous run
     try {
       fs.unlinkSync(socketPath);
+      logger.debug({ socketPath }, 'Removed stale socket file');
     } catch {
-      // fine if it doesn't exist
+      // No stale socket — expected path
     }
 
     const connections = new Set<net.Socket>();
@@ -154,16 +155,19 @@ export function createIpcSocketServer(deps: IpcDeps): IpcSocketServer {
       });
     });
 
-    server.on('error', (err) => {
-      logger.error({ groupFolder, err }, 'IPC socket server error');
-    });
+    return new Promise<string>((resolve, reject) => {
+      server.on('error', (err) => {
+        logger.error({ groupFolder, err }, 'IPC socket server error');
+        reject(err);
+      });
 
-    server.listen(socketPath, () => {
-      logger.debug({ groupFolder, socketPath }, 'IPC socket server listening');
+      server.listen(socketPath, () => {
+        fs.chmodSync(socketPath, 0o600);
+        logger.debug({ groupFolder, socketPath }, 'IPC socket server listening');
+        groups.set(groupFolder, { server, socketPath, connections });
+        resolve(socketPath);
+      });
     });
-
-    groups.set(groupFolder, { server, socketPath, connections });
-    return socketPath;
   }
 
   function destroyGroupSocket(groupFolder: string): void {

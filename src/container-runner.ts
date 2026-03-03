@@ -307,7 +307,7 @@ export async function runContainerAgent(
   // Create socket server for this group before spawning the container
   // so it's ready when the container tries to connect
   if (ipcSocket) {
-    ipcSocket.createGroupSocket(group.folder);
+    await ipcSocket.createGroupSocket(group.folder);
   }
 
   return new Promise((resolve) => {

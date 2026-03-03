@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 import { GroupQueue } from './group-queue.js';
+import type { IpcSocketServer } from './ipc-socket.js';
 
 // Mock config to control concurrency limit
 vi.mock('./config.js', () => ({
@@ -8,26 +9,20 @@ vi.mock('./config.js', () => ({
   MAX_CONCURRENT_CONTAINERS: 2,
 }));
 
-// Mock fs operations used by sendMessage/closeStdin
-vi.mock('fs', async () => {
-  const actual = await vi.importActual<typeof import('fs')>('fs');
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      mkdirSync: vi.fn(),
-      writeFileSync: vi.fn(),
-      renameSync: vi.fn(),
-    },
-  };
-});
-
 describe('GroupQueue', () => {
   let queue: GroupQueue;
+  let mockIpcSocket: IpcSocketServer;
 
   beforeEach(() => {
     vi.useFakeTimers();
     queue = new GroupQueue();
+    mockIpcSocket = {
+      createGroupSocket: vi.fn(async () => '/tmp/test.sock'),
+      destroyGroupSocket: vi.fn(),
+      sendToGroup: vi.fn(),
+      shutdown: vi.fn(),
+    };
+    queue.setIpcSocket(mockIpcSocket);
   });
 
   afterEach(() => {
@@ -246,7 +241,6 @@ describe('GroupQueue', () => {
   // --- Idle preemption ---
 
   it('does NOT preempt active container when not idle', async () => {
-    const fs = await import('fs');
     let resolveProcess: () => void;
 
     const processMessages = vi.fn(async () => {
@@ -274,19 +268,17 @@ describe('GroupQueue', () => {
     const taskFn = vi.fn(async () => {});
     queue.enqueueTask('group1@g.us', 'task-1', taskFn);
 
-    // _close should NOT have been written (container is working, not idle)
-    const writeFileSync = vi.mocked(fs.default.writeFileSync);
-    const closeWrites = writeFileSync.mock.calls.filter(
-      (call) => typeof call[0] === 'string' && call[0].endsWith('_close'),
+    // Close signal should NOT have been sent (container is working, not idle)
+    const closeCalls = vi.mocked(mockIpcSocket.sendToGroup).mock.calls.filter(
+      (call) => (call[1] as { type: string }).type === 'close',
     );
-    expect(closeWrites).toHaveLength(0);
+    expect(closeCalls).toHaveLength(0);
 
     resolveProcess!();
     await vi.advanceTimersByTimeAsync(10);
   });
 
   it('preempts idle container when task is enqueued', async () => {
-    const fs = await import('fs');
     let resolveProcess: () => void;
 
     const processMessages = vi.fn(async () => {
@@ -311,25 +303,23 @@ describe('GroupQueue', () => {
     );
     queue.notifyIdle('group1@g.us');
 
-    // Clear previous writes, then enqueue a task
-    const writeFileSync = vi.mocked(fs.default.writeFileSync);
-    writeFileSync.mockClear();
+    // Clear previous calls, then enqueue a task
+    vi.mocked(mockIpcSocket.sendToGroup).mockClear();
 
     const taskFn = vi.fn(async () => {});
     queue.enqueueTask('group1@g.us', 'task-1', taskFn);
 
-    // _close SHOULD have been written (container is idle)
-    const closeWrites = writeFileSync.mock.calls.filter(
-      (call) => typeof call[0] === 'string' && call[0].endsWith('_close'),
+    // Close signal SHOULD have been sent (container is idle)
+    const closeCalls = vi.mocked(mockIpcSocket.sendToGroup).mock.calls.filter(
+      (call) => (call[1] as { type: string }).type === 'close',
     );
-    expect(closeWrites).toHaveLength(1);
+    expect(closeCalls).toHaveLength(1);
 
     resolveProcess!();
     await vi.advanceTimersByTimeAsync(10);
   });
 
   it('sendMessage resets idleWaiting so a subsequent task enqueue does not preempt', async () => {
-    const fs = await import('fs');
     let resolveProcess: () => void;
 
     const processMessages = vi.fn(async () => {
@@ -355,17 +345,17 @@ describe('GroupQueue', () => {
     // A new user message arrives — resets idleWaiting
     queue.sendMessage('group1@g.us', 'hello');
 
-    // Task enqueued after message reset — should NOT preempt (agent is working)
-    const writeFileSync = vi.mocked(fs.default.writeFileSync);
-    writeFileSync.mockClear();
+    // Clear previous calls, then enqueue a task
+    vi.mocked(mockIpcSocket.sendToGroup).mockClear();
 
     const taskFn = vi.fn(async () => {});
     queue.enqueueTask('group1@g.us', 'task-1', taskFn);
 
-    const closeWrites = writeFileSync.mock.calls.filter(
-      (call) => typeof call[0] === 'string' && call[0].endsWith('_close'),
+    // Close signal should NOT have been sent (agent is working, not idle)
+    const closeCalls = vi.mocked(mockIpcSocket.sendToGroup).mock.calls.filter(
+      (call) => (call[1] as { type: string }).type === 'close',
     );
-    expect(closeWrites).toHaveLength(0);
+    expect(closeCalls).toHaveLength(0);
 
     resolveProcess!();
     await vi.advanceTimersByTimeAsync(10);
@@ -399,7 +389,6 @@ describe('GroupQueue', () => {
   });
 
   it('preempts when idle arrives with pending tasks', async () => {
-    const fs = await import('fs');
     let resolveProcess: () => void;
 
     const processMessages = vi.fn(async () => {
@@ -423,25 +412,24 @@ describe('GroupQueue', () => {
       'test-group',
     );
 
-    const writeFileSync = vi.mocked(fs.default.writeFileSync);
-    writeFileSync.mockClear();
+    vi.mocked(mockIpcSocket.sendToGroup).mockClear();
 
     const taskFn = vi.fn(async () => {});
     queue.enqueueTask('group1@g.us', 'task-1', taskFn);
 
-    let closeWrites = writeFileSync.mock.calls.filter(
-      (call) => typeof call[0] === 'string' && call[0].endsWith('_close'),
+    let closeCalls = vi.mocked(mockIpcSocket.sendToGroup).mock.calls.filter(
+      (call) => (call[1] as { type: string }).type === 'close',
     );
-    expect(closeWrites).toHaveLength(0);
+    expect(closeCalls).toHaveLength(0);
 
     // Now container becomes idle — should preempt because task is pending
-    writeFileSync.mockClear();
+    vi.mocked(mockIpcSocket.sendToGroup).mockClear();
     queue.notifyIdle('group1@g.us');
 
-    closeWrites = writeFileSync.mock.calls.filter(
-      (call) => typeof call[0] === 'string' && call[0].endsWith('_close'),
+    closeCalls = vi.mocked(mockIpcSocket.sendToGroup).mock.calls.filter(
+      (call) => (call[1] as { type: string }).type === 'close',
     );
-    expect(closeWrites).toHaveLength(1);
+    expect(closeCalls).toHaveLength(1);
 
     resolveProcess!();
     await vi.advanceTimersByTimeAsync(10);

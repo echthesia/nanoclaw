@@ -24,9 +24,9 @@ const isMain = process.env.NANOCLAW_IS_MAIN === '1';
 let socket: net.Socket | null = null;
 let socketConnecting = false;
 
-function getSocket(): net.Socket {
+function getSocket(): net.Socket | null {
   if (socket && !socket.destroyed) return socket;
-  if (socketConnecting) return socket!;
+  if (socketConnecting) return socket;
 
   socketConnecting = true;
   socket = net.createConnection(SOCKET_PATH);
@@ -54,7 +54,15 @@ function getSocket(): net.Socket {
 
 function sendIpcMessage(data: object): void {
   const sock = getSocket();
-  sock.write(JSON.stringify(data) + '\n');
+  if (!sock) {
+    process.stderr.write('[ipc-mcp] No socket available, message dropped\n');
+    return;
+  }
+  sock.write(JSON.stringify(data) + '\n', (err) => {
+    if (err) {
+      process.stderr.write(`[ipc-mcp] Write failed: ${err.message}\n`);
+    }
+  });
 }
 
 const server = new McpServer({
